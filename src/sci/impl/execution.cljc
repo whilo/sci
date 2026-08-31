@@ -20,6 +20,26 @@
    :default
    (def current (volatile! (new-state))))
 
+(defn call-with-detached-state
+  "Invoke `f` with an empty execution-local state, restoring the caller's
+  interpreter state afterwards. This is the host boundary used when an SCI
+  program constructs an independent interpreter recursively."
+  [f]
+  #?(:clj
+     (let [previous (.get ^ThreadLocal current)]
+       (.set ^ThreadLocal current (new-state))
+       (try
+         (f)
+         (finally
+           (.set ^ThreadLocal current previous))))
+     :default
+     (let [previous @current]
+       (vreset! current (new-state))
+       (try
+         (f)
+         (finally
+           (vreset! current previous))))))
+
 (defn current-state []
   #?(:clj (.get ^ThreadLocal current)
      :default @current))

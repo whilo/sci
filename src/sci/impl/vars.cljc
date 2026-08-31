@@ -36,6 +36,8 @@
 
 (deftype Frame [bindings prev scope prior-bindings])
 
+(defrecord ContinuationContext [ctx frame])
+
 (def top-frame (Frame. {} nil nil nil))
 
 #?(:cljs
@@ -84,6 +86,88 @@
             nil
             (execution/binding-scope state)
             nil)))
+
+(declare ^:private retarget-binding-frame)
+
+(defn capture-continuation-context
+  "Capture the current SCI context and its persistent dynamic-binding frame.
+
+  The returned value is an opaque host embedding token. It is intended for a
+  suspended continuation: invoke it later with `continuation-context-fn`, or
+  retarget an independent copy to a fork of the captured SCI context with
+  `retarget-continuation-context`."
+  ([]
+   (capture-continuation-context store/*ctx*))
+  ([ctx]
+   (when-not (:sci.impl/world ctx)
+     (throw (ex-info "No managed SCI context is active"
+                     {:type ::no-active-context})))
+   (let [source-scope (execution/binding-scope)
+         target-scope (:sci.impl/world ctx)]
+     ;; A suspension is a value snapshot, not an alias onto the evaluation's
+     ;; still-live binding boxes. Clone immediately; the source form may finish
+     ;; unwinding (or a host callback may choose a target later) before resume.
+     ;; An interpreted function invoked directly by its host has no ctx-store
+     ;; binding and therefore a nil binding scope; normalize that frame onto the
+     ;; explicit interpreter world supplied by the embedding boundary.
+     (->ContinuationContext
+      ctx
+      (retarget-binding-frame (get-thread-binding-frame)
+                              source-scope target-scope)))))
+
+(defn- clone-binding-map
+  [bindings box-cache]
+  (when bindings
+    (persistent!
+     (reduce-kv
+      (fn [ret var* box]
+        (let [forked-box
+              (if-let [entry (find @box-cache box)]
+                (val entry)
+                (let [copy (TBox. #?(:cljd nil
+                                     :clj (Thread/currentThread)
+                                     :cljs nil)
+                                  (t/getVal box))]
+                  (vswap! box-cache assoc box copy)
+                  copy))]
+          (assoc! ret var* forked-box)))
+      (transient {})
+      bindings))))
+
+(defn- retarget-binding-frame
+  [frame source-scope target-scope]
+  (let [box-cache (volatile! {})]
+    (letfn [(retarget [^Frame current]
+              (cond
+                (nil? current) nil
+                (identical? current top-frame) top-frame
+                :else
+                (Frame. (clone-binding-map (.-bindings current) box-cache)
+                        (retarget (.-prev current))
+                        (if (identical? source-scope (.-scope current))
+                          target-scope
+                          (.-scope current))
+                        (clone-binding-map (.-prior-bindings current)
+                                           box-cache))))]
+      (retarget frame))))
+
+(defn retarget-continuation-context
+  "Return an independent continuation context selecting `target-ctx`.
+
+  The target must be a fork in the captured context's lineage. Dynamic binding
+  boxes are copied, with aliases preserved inside the copied frame chain, and
+  binding scopes owned by the source world are moved to the target world."
+  [{source-ctx :ctx frame :frame} target-ctx]
+  (when-not (and (:sci.impl/world target-ctx)
+                 (identical? (:sci.impl/lineage source-ctx)
+                             (:sci.impl/lineage target-ctx)))
+    (throw (ex-info "Cannot retarget a continuation to an unrelated SCI context"
+                    {:type ::unrelated-context})))
+  (->ContinuationContext
+   target-ctx
+   (retarget-binding-frame frame
+                           (:sci.impl/world source-ctx)
+                           (:sci.impl/world target-ctx))))
 
 (defn reset-thread-binding-frame [frame]
   (let [state #?(:clj (.get ^ThreadLocal execution/current)
@@ -211,6 +295,11 @@
        (invoke [x y z]))
       ([x y z & args]
        (invoke (list* x y z args))))))
+
+(defn continuation-context-fn
+  "Wrap `f` so every invocation restores a captured continuation context."
+  [{:keys [ctx frame]} f]
+  (binding-frame-fn frame ctx f))
 
 (defn binding-conveyor-fn
   "Convey the current binding values to an independent task. The shallow
