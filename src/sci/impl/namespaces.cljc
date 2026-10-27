@@ -22,9 +22,9 @@
       :cljs [cljs.reader :as edn])
    #?@(:cljd [] :clj [[clojure.java.io :as jio]])
    #?@(:cljd [] :clj [[sci.impl.proxy :as proxy]])
-   #?(:cljd [sci.impl.copy-vars :refer [copy-core-var copy-var macrofy new-var avoid-method-too-large]]
-      :clj [sci.impl.copy-vars :refer [copy-core-var copy-var macrofy new-var avoid-method-too-large]]
-      :cljs [sci.impl.copy-vars :refer [new-var]])
+   #?(:cljd [sci.impl.copy-vars :refer [copy-core-var copy-var macrofy new-var avoid-method-too-large forkable-macro-var]]
+      :clj [sci.impl.copy-vars :refer [copy-core-var copy-var macrofy new-var avoid-method-too-large forkable-macro-var]]
+      :cljs [sci.impl.copy-vars :refer [new-var forkable-macro-var]])
    #?(:cljs [sci.impl.resolve])
    [clojure.set :as set]
    [clojure.string :as str]
@@ -2218,6 +2218,10 @@
 
  (def forkable-core-overrides
    (merge
+    (into {} (keep (fn [[sym v]]
+                     (when (and (utils/var? v) (:macro (meta v)))
+                       [sym (forkable-macro-var sym v)])))
+          clojure-core)
     (into {} (map (fn [[sym f]] [sym (copy-var f clojure-core-ns
                                               {:name sym :copy-meta-from (symbol "clojure.core" (str sym))})]))
           lazy-producers/producer-functions)

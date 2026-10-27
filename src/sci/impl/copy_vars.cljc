@@ -5,7 +5,9 @@
    [clojure.string :as str]
    [sci.impl.cljs]
    [sci.impl.macros :as macros]
+   [sci.impl.syntax :as syntax]
    [sci.impl.utils :as utils :refer [clojure-core-ns]]
+   [sci.impl.vars :as vars]
    #?(:cljd [sci.lang :as lang] :default [sci.lang]))
   #?(:cljs (:require-macros [sci.impl.copy-vars :refer [copy-var copy-core-var macrofy]])))
 
@@ -190,6 +192,16 @@
                             (and (not elide-vars)
                                  extra-meta)
                             (merge extra-meta))))))
+
+(defn forkable-macro-var
+  "Copy one trusted native macro Var with immutable code output. Installed
+   only for forkable contexts, including consumers that invoke resolved
+   macros directly rather than through the interpreter's macroexpand API."
+  [sym v]
+  (let [f (vars/getRawRoot v)
+        wrapped (with-meta (fn [& args] (syntax/canonicalize (apply f args)))
+                  (meta f))]
+    (utils/new-var sym wrapped (meta v))))
 
 (defn new-var
   ([sym f] (new-var sym f nil nil))
