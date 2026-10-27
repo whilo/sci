@@ -88,12 +88,15 @@
           ;; Only exclude symbols that resolve to a non-core namespace (e.g. a
           ;; third-party fn named like a core inlined var). Core macros set up
           ;; via macrofy (ns, lazy-seq, ...) resolve to a bare unqualified symbol
-          ;; in CLJS, so a nil namespace counts as core.
+          ;; in CLJS, so a nil namespace counts as core. Self-hosted CLJS may
+          ;; instead resolve native macros into its exact cljs.core$macros
+          ;; namespace; arbitrary third-party $macros namespaces stay excluded.
           fqsym-ns (namespace fqsym)
           core-ns? (or (nil? fqsym-ns)
                        (= "clojure.core" fqsym-ns)
                        (= "cljd.core" fqsym-ns)
-                       (= "cljs.core" fqsym-ns))
+                       (= "cljs.core" fqsym-ns)
+                       (= "cljs.core$macros" fqsym-ns))
           inline (and core-ns? (contains? inlined-vars sym))
           fast-path (and core-ns? (or (= 'or sym)
                                       (= 'and sym)
