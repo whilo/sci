@@ -647,6 +647,16 @@
     (swap! env update :namespaces dissoc sym)
     nil))
 
+(defn- register-interned-var! [ctx v]
+  ;; Interning through either the SCI or host API must install the same
+  ;; fork-local root descriptor as an analyzed def. In particular, a freshly
+  ;; interned host value must not bypass the fork policy by living only in env.
+  (when (and (:sci.impl/world ctx)
+             (not (world/registered? (:sci.impl/world ctx) v)))
+    (world/register-var! v (sci.impl.vars/getRawRoot v) (meta v)
+                         (sci.impl.vars/getRawWatches v)))
+  v)
+
 (defn sci-intern
   ;; in this case the var will become unbound
   ([ns var-sym]
@@ -654,22 +664,26 @@
          ns (sci-the-ns* ctx ns)
          ns-name (types/getName ns)
          env (:env ctx)]
-     (or (get-in @env [:namespaces ns-name var-sym])
-         (let [new-var (sci.impl.utils/new-var var-sym nil (assoc (meta var-sym) :ns ns))]
-           (sci.impl.vars/unbind new-var)
-           (swap! env assoc-in [:namespaces ns-name var-sym] new-var)
-           new-var))))
+     (register-interned-var!
+      ctx
+      (or (get-in @env [:namespaces ns-name var-sym])
+          (let [new-var (sci.impl.utils/new-var var-sym nil (assoc (meta var-sym) :ns ns))]
+            (sci.impl.vars/unbind new-var)
+            (swap! env assoc-in [:namespaces ns-name var-sym] new-var)
+            new-var)))))
   ([ns var-sym val]
    (let [ctx (store/get-ctx)
          ns (sci-the-ns* ctx ns)
          ns-name (types/getName ns)
          env (:env ctx)]
-     (or (when-let [v (get-in @env [:namespaces ns-name var-sym])]
-           (sci.impl.vars/bindRoot v val)
-           v)
-         (let [new-var (sci.impl.utils/new-var var-sym val (assoc (meta var-sym) :ns ns))]
-           (swap! env assoc-in [:namespaces ns-name var-sym] new-var)
-           new-var)))))
+     (register-interned-var!
+      ctx
+      (or (when-let [v (get-in @env [:namespaces ns-name var-sym])]
+            (sci.impl.vars/bindRoot v val)
+            v)
+          (let [new-var (sci.impl.utils/new-var var-sym val (assoc (meta var-sym) :ns ns))]
+            (swap! env assoc-in [:namespaces ns-name var-sym] new-var)
+            new-var))))))
 
 (defn sci-bound?
   [sci-var]
