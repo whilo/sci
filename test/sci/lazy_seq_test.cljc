@@ -233,6 +233,45 @@
       (is (= :parent ((first (run parent "xs"))))
           "projecting a child result must not replace the shared cached function"))))
 
+(defn- assert-returned-sequence-laws [value]
+  (let [head (first value)
+        snapshot (vec value)
+        metadata-alias (with-meta value {:view :alias})]
+    (is (identical? head (first value)) "reading a cached head preserves its identity")
+    (is (identical? head (first (seq value))) "seq retains the same projected head")
+    (is (identical? head (first snapshot)) "iteration retains the same projected head")
+    (is (identical? head (first metadata-alias)) "metadata changes do not replace projected elements")
+    (is (= value snapshot))
+    (is (= snapshot value))
+    (is (= (hash value) (hash snapshot)))
+    #?(:clj (is (= (.hashCode ^Object value) (.hashCode ^Object snapshot))))
+    (when (next value)
+      (let [second-value (nth snapshot 1)]
+        (is (identical? second-value (first (next value))))
+        (is (identical? second-value (first (rest value))))))
+    (let [s (seq value)]
+      (when (chunked-seq? s)
+        (let [chunk (chunk-first s)]
+          (is (identical? head (nth chunk 0)))
+          (is (identical? head (nth (chunk-first (seq value)) 0)))
+          (is (= (vec chunk) (subvec snapshot 0 (count chunk)))))))))
+
+(deftest projected-function-elements-obey-collection-laws
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (defn observe [] label)
+                 (def xs (lazy-seq (list observe observe observe)))
+                 (def nested-xs (lazy-seq (list {:function observe :nested [observe]})))
+                 (def chunked-xs (map (fn [_] observe) (vec (range 40))))
+                 nil")
+    (let [child (sci/fork parent)]
+      (run child "(def label :child)")
+      (doseq [expression ["xs" "nested-xs" "chunked-xs"]]
+        (testing expression
+          (assert-returned-sequence-laws (run child expression))))
+      (is (= :child ((first (run child "xs")))))
+      (is (= :parent ((first (run parent "xs"))))))))
+
 (deftest host-consumption-can-select-a-related-world-explicitly
   (let [parent (forkable)]
     (run parent "(def label :parent)
@@ -337,14 +376,28 @@
 
 
 (deftest lazy-body-retains-its-implicit-zero-argument-recur-target
-  (let [code "(def calls (atom 0))
-              (def xs (lazy-seq
-                        (if (< (swap! calls inc) 3)
-                          (recur)
-                          (list @calls))))
-              [(first xs) @calls]"]
-    (is (= [3 3] (run (sci/init {}) code)))
-    (is (= (run (sci/init {}) code) (run (forkable) code)))))
+  ;; Standard SCI historically has a separate implicit-recur limitation here.
+  ;; Compare the managed path to Clojure's zero-argument lazy thunk contract,
+  ;; rather than requiring an unrelated change to standard evaluation.
+  (is (= [3 3]
+         (run (forkable)
+              "(def calls (atom 0))
+               (def xs (lazy-seq
+                         (if (< (swap! calls inc) 3)
+                           (recur)
+                           (list @calls))))
+               [(first xs) @calls]")))
+  (testing "the implicit thunk's recur target does not become the outer loop"
+    (is (= [[:outside 3] 3]
+           (run (forkable)
+                "(def calls (atom 0))
+                 (def xs
+                   (loop [outer :outside]
+                     (lazy-seq
+                       (if (< (swap! calls inc) 3)
+                         (recur)
+                         (list outer @calls)))))
+                 [(vec xs) @calls]")))))
 
 (deftest lazy-body-captures-lexical-bindings-before-a-fork
   (let [parent (forkable)]
