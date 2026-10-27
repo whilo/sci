@@ -1956,11 +1956,8 @@
    :clj
    (deftest affine-host-resource-fork-policy-test
      (testing "foreign host lazy realization is rejected"
-       (let [user-ns (sci/create-ns 'user)
-             parent (tu/forkable-init
-                     {:namespaces {'user {'pending-xs
-                                          (sci/new-var 'pending-xs (map inc [1 2 3])
-                                                       {:ns user-ns})}}})]
+       (let [parent (tu/forkable-init nil)]
+         (sci/intern parent 'user 'pending-xs (map inc [1 2 3]))
          (try
            (sci/fork parent)
            (is false "expected lazy sequence rejection")
