@@ -37,9 +37,22 @@
          seq-realized? seq-string java-list seq-iterator chunk-first* chunk-next*
          chunk-rest* owner-context owner-value normalize-seq make-owner projection-data!)
 
-#?(:clj
-   (defmacro def-sequence-type [name fields data-methods chunked?]
-     (let [cljs? (boolean (:ns &env))
+(def ^:private realization-requires-normalization?
+  ;; LazySeq's pending marker changed from its thunk to its normalization
+  ;; lock on newer JVM runtimes. Probe that observable contract rather than
+  ;; tying interpreter behavior to a version string. Use reusable thunks:
+  ;; core/lazy-seq's :once closure can clear captured fields on a failed call.
+  #?(:clj
+     (let [probe (clojure.lang.LazySeq.
+                  (fn []
+                    (clojure.lang.LazySeq.
+                     (fn [] (throw (ex-info "Lazy normalization probe" {}))))))]
+       (try (seq probe) (catch Throwable _ nil))
+       (not (realized? probe)))
+     :default false))
+
+(defmacro def-sequence-type [name fields data-methods chunked?]
+     (let [cljs? #?(:cljs true :default (boolean (:ns &env)))
            methods
            (if cljs?
              '(cljs.core/ISeqable
@@ -131,8 +144,8 @@
                  (chunkedMore [this] (chunk-rest* this)))))]
        `(deftype ~name ~fields
           sci.fork/Forkable (~'fork-value [~'this] ~'this)
-          ISequenceData ~@data-methods
-          ~@methods ~@chunk-methods))))
+          sci.impl.lazy-seq/ISequenceData ~@data-methods
+          ~@methods ~@chunk-methods)))
 
 #?(:cljd
    (do
@@ -233,7 +246,9 @@
         (-seq-realized? [_]
           (if owner
             (let [^SeqBox b (owner-box owner)]
-              (with-box b #(not= :pending (:phase @(.-state b)))))
+              (with-box b #(if realization-requires-normalization?
+                             (= :ready (:phase @(.-state b)))
+                             (not= :pending (:phase @(.-state b))))))
             (if #?(:clj (instance? IPending value) :cljs (satisfies? IPending value))
               (realized? value) true))))
        false)
@@ -311,8 +326,13 @@
                  (:value state)
                  (let [raw (raw-value! owner)]
                    ;; JVM LazySeq clears its intermediate result before seq
-                   ;; normalization. CLJS retains it on a normalization error.
-                   #?(:clj (vreset! (.-state b) {:phase :ready :value nil}))
+                   ;; normalization. Newer JVMs retain a pending marker until
+                   ;; normalization succeeds; both abandon the raw result on
+                   ;; failure. CLJS retains its raw result instead.
+                   #?(:clj (vreset! (.-state b)
+                                    {:phase (if realization-requires-normalization?
+                                              :normalizing :ready)
+                                     :value nil}))
                    (let [result (normalize-seq raw)]
                      (vreset! (.-state b) {:phase :ready :value result})
                      result))))))))

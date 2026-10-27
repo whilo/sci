@@ -1000,7 +1000,11 @@
         ctx (with-recur-target ctx true) ;; body is analyzed in context of implicit no-arg fn
         ana (return-do ctx expr body)]
     (sci.impl.types/->Node
-     (lazy-seq (t/eval ana ctx bindings))
+     ;; The host lazy-seq macro marks its closure :once. JVM compilers may
+     ;; clear captured interpreter machinery before a failed call, preventing
+     ;; the native LazySeq from retrying the body on its next consumption.
+     #?(:clj (clojure.lang.LazySeq. (fn [] (t/eval ana ctx bindings)))
+        :default (lazy-seq (t/eval ana ctx bindings)))
      nil))))
 
 (defn return-if
