@@ -205,12 +205,17 @@
 
 
 (defn- project-and-retire-child!
-  [parent ^ReferenceQueue queue children worlds views functions]
+  [parent ^ReferenceQueue queue children worlds views functions child-defined?]
   (let [child (sci/fork parent)]
     (swap! children conj (tracked-reference queue child))
     (swap! worlds conj (tracked-reference queue (:sci.impl/world child)))
     (try
       (sci/eval-string* child "(def projection-label :child)")
+      (when child-defined?
+        ;; The registry's original function, as well as its public wrapper,
+        ;; can itself retain the child context. Stale weak-key metadata must
+        ;; not keep that original function alive after retirement.
+        (sci/eval-string* child "(defn projection-observe [] projection-label) nil"))
       (let [returned (sci/eval-string* child "projection-cells")
             projected (first returned)]
         (is (= :child (projected)))
@@ -234,8 +239,10 @@
         nil")
       ;; Projected callbacks capture the child context. Keeping their raw
       ;; source owner in the parent must not retain retired projection caches.
-      (dotimes [_ 12]
-        (project-and-retire-child! parent queue children worlds views functions))
+      (doseq [child-defined? [false true]]
+        (testing (if child-defined? "child-created originals" "parent-created originals")
+          (dotimes [_ 6]
+            (project-and-retire-child! parent queue children worlds views functions child-defined?))))
       (is (= 12 (count @functions)))
       (is (collect-unreachable! queue (into [] cat [@children @worlds @views @functions]))
           (str "retirement must release context-bound projection cycles: "
