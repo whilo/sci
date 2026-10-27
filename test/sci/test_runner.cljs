@@ -17,6 +17,7 @@
    [sci.lazy-producers-test]
    [sci.lazy-foreign-input-test]
    [sci.world-retirement-test]
+   [sci.syntax-test]
    [sci.js-test]
    [sci.multimethods-test]
    [sci.namespaces-test]
@@ -64,6 +65,7 @@
    'sci.lazy-producers-test
    'sci.lazy-foreign-input-test
    'sci.world-retirement-test
+   'sci.syntax-test
    'sci.js-test
    'sci.multimethods-test
    'sci.namespaces-test

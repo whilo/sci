@@ -36,6 +36,14 @@ Standard JVM lazy bodies also use reusable interpreter thunks. The host
 machinery on a failed call; it must not prevent SCI's native lazy value from
 retrying its body on the next consumption.
 
+Trusted built-in macro functions in forkable contexts materialize generated
+code into eager immutable syntax. This includes direct calls through resolved
+macro Vars, as used by interpreted CPS transformations. Collection shape,
+metadata and unchanged immutable subtrees are preserved; quoted payloads and
+opaque host objects are left alone. This adapts compiler syntax, not arbitrary
+runtime lazy values. Standard native macro functions and interpreted user
+macros keep their existing behavior.
+
 ## Representation and lifetime
 
 A lazy value has a stable logical owner. Each world has an independent state

@@ -51,7 +51,7 @@
                   (fn []
                     (clojure.lang.LazySeq.
                      (fn [] (throw (ex-info "Lazy normalization probe" {}))))))]
-       (try (seq probe) (catch Throwable _ nil))
+       (try (seq probe) (catch clojure.lang.ExceptionInfo _ nil))
        (not (realized? probe)))
      :default false))
 
