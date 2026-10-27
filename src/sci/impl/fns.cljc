@@ -32,16 +32,20 @@
      :cljs (.set interpreted-functions f info))
   f)
 
-(defn- weak-reference [value]
-  #?(:clj (WeakReference. value)
-     :cljs (js/WeakRef. value)
-     :cljd (WeakReference. value)))
+(defn- metadata-reference [value]
+  ;; JVM WeakHashMap can retain a stale entry's value until its next access,
+  ;; so metadata must not strongly retain an original closure or its world.
+  ;; JS WeakMap and Dart Expando use ephemeron associations instead: these
+  ;; metadata thunks are retained only while their function key remains live.
+  #?(:cljd (fn [] value)
+     :clj (WeakReference. value)
+     :cljs (fn [] value)))
 
 (defn- referenced-value [reference]
   (when reference
-    #?(:clj (.get ^WeakReference reference)
-       :cljs (.deref reference)
-       :cljd (.-target reference))))
+    #?(:cljd (reference)
+       :clj (.get ^WeakReference reference)
+       :cljs (reference))))
 
 (defn interpreted-fn
   "Mark an SCI-interpreted function so a public evaluation boundary can bind
@@ -98,12 +102,12 @@
                       (context-wrapper (:shape info) ctx original)
                       (meta value))]
         (register-function! wrapped
-                            {:original-ref (weak-reference original)
+                            {:original-ref (metadata-reference original)
                              :shape (:shape info)
                              ;; JVM WeakHashMap only expunges stale keys on a
                              ;; later access. Its metadata must not keep a
                              ;; discarded world alive while awaiting that.
-                             :world-ref (weak-reference target)})))))
+                             :world-ref (metadata-reference target)})))))
 
 (defn contextualize
   "Bind an interpreted function result to `ctx` for direct host invocation.

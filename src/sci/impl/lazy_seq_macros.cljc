@@ -2,7 +2,8 @@
   "Compile-time helpers kept separate from managed sequence runtime state.
    Self-hosted ClojureScript can load this namespace as macros without
    bootstrapping a second copy of the runtime protocols and types."
-  {:no-doc true})
+  {:no-doc true}
+  (:refer-clojure :exclude [lazy-seq]))
 
 (defmacro def-sequence-type [name fields data-methods chunked?]
      (let [cljs? #?(:cljs true :default (boolean (:ns &env)))
@@ -100,5 +101,5 @@
           sci.impl.lazy-seq/ISequenceData ~@data-methods
           ~@methods ~@chunk-methods)))
 
-(defmacro managed-lazy-seq [& body]
+(defmacro lazy-seq [& body]
   `(sci.impl.lazy-seq/lazy-seq* (fn [] ~@body)))

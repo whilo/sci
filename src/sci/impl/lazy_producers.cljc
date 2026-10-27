@@ -23,10 +23,8 @@
   (:require [sci.impl.core-protocols :as managed]
             [sci.impl.lazy-seq :as lazyseq]
             #?@(:cljd []
-                :clj [[sci.impl.lazy-seq-macros :refer [managed-lazy-seq]
-                       :rename {managed-lazy-seq lazy-seq}]]))
-  #?(:cljs (:require-macros [sci.impl.lazy-seq-macros :refer [managed-lazy-seq]
-                            :rename {managed-lazy-seq lazy-seq}])))
+                :clj [[sci.impl.lazy-seq-macros :refer [lazy-seq]]]))
+  #?(:cljs (:require-macros [sci.impl.lazy-seq-macros :refer [lazy-seq]])))
 
 #?(:cljd
    (do
