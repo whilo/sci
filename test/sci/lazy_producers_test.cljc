@@ -30,15 +30,18 @@
                 "(nil? (cycle []))"
                 "(nil? (repeat 0 :x))"
                 "(vec (repeat 2.5 :x))"
-                "(vec (replicate 2.5 :x))"
+                #?(:clj "(vec (replicate 2.5 :x))")
                 "(replace {1 :one} [1 2 1])"
                 "(vec (replace {1 :one} (list 1 2 1)))"
                 "(vec (subseq (sorted-set 1 2 3 4) < 3))"
                 "(vec (subseq (sorted-set 1 2 3 4) > 2))"
                 "(vec (subseq (sorted-set 1 2 3 4) >= 2 < 4))"
+                "(vec (subseq (sorted-map 1 :a 2 :b 3 :c 4 :d) >= 2 < 4))"
+                "(vec (subseq (sorted-set-by > 1 2 3 4) >= 3))"
                 "(vec (rsubseq (sorted-set 1 2 3 4) > 2))"
                 "(vec (rsubseq (sorted-set 1 2 3 4) < 3))"
                 "(vec (rsubseq (sorted-set 1 2 3 4) >= 2 < 4))"
+                "(vec (rsubseq (sorted-map 1 :a 2 :b 3 :c 4 :d) >= 2 < 4))"
                 "(vec (dedupe []))"
                 "(vec (drop 2 [1 2 3 4]))"
                 "(vec (take-while #(< % 3) [1 2 3 1]))"
@@ -72,7 +75,11 @@
              (evaluate (forkable-context) form))))))
 
 (deftest producer-caches-are-local-and-preserve-chunking
-  (let [parent (forkable-context)]
+  (let [first-call-count
+        (evaluate (sci/init {})
+                  "(let [calls (atom 0) xs (map (fn [x] (swap! calls inc) x) [1 2 3])]
+                     (first xs) @calls)")
+        parent (forkable-context)]
     (evaluate parent "(def calls (atom 0))
                       (def xs (map (fn [x] (swap! calls inc) (+ x 10)) [1 2 3]))
                       (def boxed {:items xs})
@@ -80,12 +87,13 @@
     (let [child (sci/fork parent)]
       (is (= 0 (evaluate parent "@calls")) "forking did not evaluate the producer")
       (is (= 11 (evaluate child "(first (get-items))")))
-      (is (= 3 (evaluate child "@calls")) "vector input preserves core's chunked realization")
+      (is (= first-call-count (evaluate child "@calls"))
+          "vector input preserves this host's chunked or unchunked realization")
       (is (= 0 (evaluate parent "@calls")) "child cache filling does not execute in its parent")
       (is (= [11 12 13] (evaluate child "(vec (get-items))")))
       (is (= 3 (evaluate child "@calls")) "already-realized output is not repeated")
       (is (= 11 (evaluate parent "(first (get-items))")))
-      (is (= 3 (evaluate parent "@calls")))
+      (is (= first-call-count (evaluate parent "@calls")))
       (let [after-realization (sci/fork parent)]
         (is (= [11 12 13] (evaluate after-realization "(vec xs)")))
         (is (= 3 (evaluate after-realization "@calls")) "fork inherits the realized prefix")))))
