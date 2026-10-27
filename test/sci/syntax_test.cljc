@@ -131,3 +131,22 @@
                      `(let [value# ~expression] value#))
                    [(counted 9) @expansion-count]")))
           (finally (sci/retire! ctx)))))))
+
+#?(:cljd nil
+   :default
+   (deftest unchanged-opaque-keys-are-not-rehashed-by-canonicalization
+     (doseq [kind [:map :set]]
+       (testing (name kind)
+         (let [hash-calls (atom 0)
+               key #?(:clj (reify Object
+                             (hashCode [_] (swap! hash-calls inc) 42))
+                      :cljs (reify IHash
+                              (-hash [_] (swap! hash-calls inc) 42)))
+               form (case kind
+                      :map (with-meta {key [:unchanged]} {:kind :map})
+                      :set (with-meta #{key} {:kind :set}))
+               before @hash-calls
+               result (syntax/canonicalize form)]
+           (is (identical? form result))
+           (is (= before @hash-calls)
+               "walking unchanged syntax must not invoke opaque user hashing"))))))
