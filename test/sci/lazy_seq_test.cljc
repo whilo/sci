@@ -1,0 +1,299 @@
+(ns sci.lazy-seq-test
+  "The observable contract of interpreter-owned, fork-local lazy realization."
+  (:require [clojure.test :refer [deftest is testing]]
+            [sci.core :as sci]))
+
+(defn- forkable []
+  (sci/init {:runtime-mode :forkable}))
+
+(defn- run [ctx code]
+  (sci/eval-string* ctx code))
+
+(defn- caught [code]
+  (str "(try " code " (catch "
+       #?(:cljd "Object" :clj "Exception" :cljs ":default")
+       " _ :failed))"))
+
+(deftest pending-realization-follows-the-consuming-world
+  (let [parent (forkable)]
+    (run parent "(def counter (atom 0))
+                 (def label :parent)
+                 (def xs (lazy-seq (list [label (swap! counter inc)])))
+                 nil")
+    (let [child (sci/fork parent)]
+      (testing "constructing and forking the sequence perform no work"
+        (is (= [false 0] (run parent "[(realized? xs) @counter]")))
+        (is (= [false 0] (run child "[(realized? xs) @counter]"))))
+      (testing "child realization uses child roots and a child cache"
+        (is (= [[:child 11] [:child 11] true 11]
+               (run child "(def label :child)
+                           (reset! counter 10)
+                           [(first xs) (first xs) (realized? xs) @counter]")))
+        (is (= [false 0 :parent]
+               (run parent "[(realized? xs) @counter label]")))
+        (is (= [[:parent 1] 1]
+               (run parent "[(first xs) @counter]")))
+        (is (= [[:child 11] 11]
+               (run child "[(first xs) @counter]")))))))
+
+(deftest a-realized-prefix-is-inherited-with-independent-tails
+  (let [parent (forkable)]
+    (run parent "(def events (atom []))
+                 (def label :parent)
+                 (defn cells [n]
+                   (lazy-seq
+                     (when (< n 3)
+                       (swap! events conj [label n])
+                       (cons [label n] (cells (inc n))))))
+                 (def xs (cells 0))
+                 (first xs)")
+    (let [child (sci/fork parent)]
+      (is (= [[:parent 0]] (run child "@events")) "fork does not force the tail")
+      (is (= [[[:parent 0] [:child 1] [:child 2]]
+              [[:parent 0] [:child 1] [:child 2]]]
+             (run child "(def label :child) [(vec xs) @events]")))
+      (is (= [[:parent 0]] (run parent "@events")))
+      (is (= [[[:parent 0] [:parent 1] [:parent 2]]
+              [[:parent 0] [:parent 1] [:parent 2]]]
+             (run parent "[(vec xs) @events]")))
+      (let [grandchild (sci/fork child)]
+        (is (= [[[:parent 0] [:child 1] [:child 2]] 3]
+               (run grandchild "[(vec xs) (count @events)]")))))))
+
+(deftest aliases-captured-in-closures-and-containers-remain-world-local
+  (let [parent (forkable)]
+    (run parent "(def counter (atom 0))
+                 (def xs (lazy-seq (list (swap! counter inc))))
+                 (def aliases {:one xs :nested [xs]})
+                 (def read-captured (let [captured xs] (fn [] (first captured))))
+                 nil")
+    (let [child (sci/fork parent)]
+      (is (= [1 1 1 1]
+             (run child "[(read-captured)
+                          (first (:one aliases))
+                          (first (first (:nested aliases)))
+                          @counter]")))
+      (is (= 0 (run parent "@counter")))
+      (is (= [1 1] (run parent "[(read-captured) @counter]")))
+      (is (= 1 (run child "@counter"))))))
+
+(deftest sequence-value-operations-match-standard-sci
+  (doseq [code ["(let [xs (lazy-seq (list 1 2 3))]
+                   [(seq? xs) (sequential? xs) (seq xs) (first xs) (next xs)
+                    (rest xs) (count xs) (= xs '(1 2 3)) (= '(1 2 3) xs)
+                    (= (hash xs) (hash '(1 2 3))) (conj xs 0) (empty xs)])"
+                "(let [xs (lazy-seq nil)]
+                   [(seq xs) (first xs) (next xs) (rest xs) (count xs)
+                    (= xs '()) (= '() xs) (= (hash xs) (hash '()))])"
+                "(let [calls (atom 0)
+                       xs (lazy-seq (swap! calls inc) (list :value))
+                       alias (with-meta xs {:tag :alias})]
+                   [(meta xs) (meta alias) (realized? xs) (realized? alias)
+                    @calls (first xs) (first alias) @calls])"]]
+    (is (= (run (sci/init {}) code) (run (forkable) code)) code)))
+
+(deftest hashing-and-equality-follow-world-local-realization
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (def counter (atom 0))
+                 (def xs (lazy-seq (list [label (swap! counter inc)])))
+                 nil")
+    (let [child (sci/fork parent)]
+      (is (= [true true 1]
+             (run child "(def label :child)
+                         [(= (hash xs) (hash '([:child 1])))
+                          (= xs '([:child 1])) @counter]")))
+      (is (= [false 0] (run parent "[(realized? xs) @counter]")))
+      (is (= [true true 1]
+             (run parent "[(= (hash xs) (hash '([:parent 1])))
+                           (= xs '([:parent 1])) @counter]"))))))
+
+(deftest metadata-aliases-inherit-the-prefix-with-world-local-tails
+  (let [parent (forkable)]
+    (run parent "(def events (atom []))
+                 (defn cells [n]
+                   (lazy-seq
+                     (when (< n 3)
+                       (swap! events conj n)
+                       (cons n (cells (inc n))))))
+                 (def xs (cells 0))
+                 (def alias (with-meta xs {:origin :metadata-alias}))
+                 nil")
+    (let [child (sci/fork parent)]
+      (is (= [[0 1 2] [0 1 2] {:origin :metadata-alias}]
+             (run child "[(vec alias) @events (meta alias)]")))
+      (is (= #?(:clj [0] :cljs [] :cljd [0]) (run parent "@events")))
+      (is (= [[0 1 2] [0 1 2]] (run parent "[(vec xs) @events]"))))))
+
+(deftest exception-and-normalization-semantics-match-standard-sci
+  (let [forms [(str "(def calls (atom 0))
+                     (def xs (lazy-seq
+                               (if (= 1 (swap! calls inc))
+                                 (throw (ex-info \"first attempt\" {}))
+                                 (list :ok))))
+                     [" (caught "(first xs)") " (realized? xs) @calls
+                      " (caught "(first xs)") " (realized? xs) @calls]")
+               (str "(def calls (atom 0))
+                     (def xs (lazy-seq
+                               (swap! calls inc)
+                               (lazy-seq
+                                 (swap! calls inc)
+                                 (throw (ex-info \"normalizing\" {})))))
+                     [" (caught "(first xs)") " (realized? xs) @calls
+                      " (caught "(first xs)") " (realized? xs) @calls]")]]
+    (doseq [code forms]
+      (is (= (run (sci/init {}) code) (run (forkable) code)) code))))
+
+(deftest a-fork-after-a-failed-thunk-retains-retry-semantics
+  (let [parent (forkable)]
+    (run parent "(def calls (atom 0))
+                 (def xs (lazy-seq
+                           (if (= 1 (swap! calls inc))
+                             (throw (ex-info \"first attempt\" {}))
+                             (list (swap! calls inc)))))
+                 nil")
+    (is (= :failed (run parent (caught "(first xs)"))))
+    (let [child (sci/fork parent)]
+      (is (= [3 3] (run child "[(first xs) @calls]")))
+      (is (= 1 (run parent "@calls")))
+      (is (= [3 3] (run parent "[(first xs) @calls]"))))))
+
+(deftest genuinely-infinite-sequences-stay-lazy
+  (let [parent (forkable)]
+    (run parent "(def counter (atom 0))
+                 (defn ticks []
+                   (lazy-seq (cons (swap! counter inc) (ticks))))
+                 (def xs (ticks))
+                 nil")
+    (let [child (sci/fork parent)]
+      (is (= [[1 2 3 4] 4] (run child "[(vec (take 4 xs)) @counter]")))
+      (is (= 0 (run parent "@counter")))
+      (is (= [[1 2] 2] (run parent "[(vec (take 2 xs)) @counter]")))
+      (is (= 4 (run child "@counter"))))))
+
+(deftest chunk-effects-match-standard-sci
+  (doseq [code ["(let [calls (atom [])
+                        xs (map (fn [x] (swap! calls conj x) x) (vec (range 70)))]
+                    [(first xs) (count @calls) (vec (take 35 xs)) (count @calls)])"
+                "(let [calls (atom [])
+                        xs (filter (fn [x] (swap! calls conj x) (odd? x))
+                                   (vec (range 70)))]
+                    [(first xs) (count @calls) (vec (take 18 xs)) (count @calls)])"]]
+    (is (= (run (sci/init {}) code) (run (forkable) code)) code)))
+
+(deftest host-consumption-preserves-the-returning-world
+  (let [parent (forkable)]
+    (run parent "(def counter (atom 0))
+                 (def label :parent)
+                 (def xs (lazy-seq (list [label (swap! counter inc)])))
+                 nil")
+    (let [child (sci/fork parent)
+          returned (run child "(def label :child) xs")
+          contained (run child "{:items [xs]}")]
+      (is (= [:child 1] (first returned)))
+      (is (= [:child 1] (first (first (:items contained)))))
+      (is (= 1 (run child "@counter")))
+      (is (= 0 (run parent "@counter")))
+      (is (= [:parent 1] (first (run parent "xs")))))))
+
+(deftest host-consumption-can-select-a-related-world-explicitly
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (def xs (lazy-seq (list label)))
+                 nil")
+    (let [from-parent (run parent "xs")
+          child (sci/fork parent)]
+      (run child "(def label :child)")
+      (is (= :child (sci/call-with-context child #(first from-parent))))
+      (is (= false (run parent "(realized? xs)")))
+      (is (= :parent (first from-parent))))))
+
+(deftest an-unrelated-world-does-not-retarget-a-returned-sequence
+  (let [parent (forkable)]
+    (run parent "(def label :owner)
+                 (def counter (atom 0))
+                 (def xs (lazy-seq (list [label (swap! counter inc)])))
+                 nil")
+    (let [returned (run parent "xs")
+          unrelated (sci/init {:runtime-mode :forkable
+                               :bindings {'foreign returned}})]
+      (is (= [:owner 1]
+             (run unrelated "(def label :unrelated)
+                             (def counter (atom 100))
+                             (first foreign)")))
+      (is (= 1 (run parent "@counter")))
+      (is (= 100 (run unrelated "@counter"))))))
+
+(deftest standard-mode-keeps-native-sequence-values
+  (let [xs (run (sci/init {}) "(map inc [1 2 3])")]
+    #?(:clj (is (instance? clojure.lang.LazySeq xs))
+       :cljs (is (instance? cljs.core/LazySeq xs))
+       :cljd (is (= '(2 3 4) xs)))
+    (is (= '(2 3 4) xs))))
+
+#?(:cljd nil
+   :clj
+   (deftest foreign-host-lazy-sequences-remain-affine
+     (let [parent (sci/init {:runtime-mode :forkable
+                             :bindings {'foreign (map inc [1 2 3])}})]
+       (try
+         (sci/fork parent)
+         (is false "a host lazy cache must not be silently shared")
+         (catch clojure.lang.ExceptionInfo e
+           (is (= :lazy-seq (:resource-kind (ex-data e)))))))))
+
+#?(:cljd nil
+   :clj
+   (deftest concurrent-realization-runs-the-thunk-once
+     (let [entered (promise)
+           release (promise)
+           calls (atom 0)
+           ctx (sci/init {:runtime-mode :forkable
+                          :bindings {'block! (fn []
+                                               (swap! calls inc)
+                                               (deliver entered true)
+                                               @release)}})]
+       (run ctx "(def xs (lazy-seq (block!) (list :value))) nil")
+       (let [first-reader (future (run ctx "(first xs)"))
+             second-reader (future (run ctx "(first xs)"))]
+         (try
+           (is (= true (deref entered 2000 ::timeout)))
+           (is (= ::waiting (deref second-reader 50 ::waiting)))
+           (deliver release true)
+           (is (= :value (deref first-reader 2000 ::timeout)))
+           (is (= :value (deref second-reader 2000 ::timeout)))
+           (is (= 1 @calls))
+           (finally
+             (deliver release true)
+             (future-cancel first-reader)
+             (future-cancel second-reader)))))))
+
+#?(:cljd nil
+   :clj
+   (deftest fork-waits-for-an-active-realization
+     (let [entered (promise)
+           release (promise)
+           calls (atom 0)
+           parent (sci/init {:runtime-mode :forkable
+                             :bindings {'block! (fn []
+                                                  (swap! calls inc)
+                                                  (deliver entered true)
+                                                  @release)}})]
+       (run parent "(def xs (lazy-seq (block!) (list :value))) nil")
+       (let [reader (future (run parent "(first xs)"))]
+         (try
+           (is (= true (deref entered 2000 ::timeout)))
+           (let [forking (future (sci/fork parent))]
+             (try
+               (is (= ::waiting (deref forking 50 ::waiting)))
+               (deliver release true)
+               (is (= :value (deref reader 2000 ::timeout)))
+               (let [child (deref forking 2000 ::timeout)]
+                 (is (map? child))
+                 (when (map? child)
+                   (is (= :value (run child "(first xs)")))))
+               (is (= 1 @calls) "child inherits the completed realization")
+               (finally (future-cancel forking))))
+           (finally
+             (deliver release true)
+             (future-cancel reader)))))))
