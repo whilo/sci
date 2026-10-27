@@ -21,8 +21,12 @@
                             split-with random-sample repeat iterate cycle range
                             dedupe sequence eduction replace replicate subseq rsubseq])
   (:require [sci.impl.core-protocols :as managed]
-            [sci.impl.lazy-seq :as lazyseq])
-  #?(:cljs (:require-macros [sci.impl.lazy-producers :refer [lazy-seq]])))
+            [sci.impl.lazy-seq :as lazyseq]
+            #?@(:cljd []
+                :clj [[sci.impl.lazy-seq-macros :refer [managed-lazy-seq]
+                       :rename {managed-lazy-seq lazy-seq}]]))
+  #?(:cljs (:require-macros [sci.impl.lazy-seq-macros :refer [managed-lazy-seq]
+                            :rename {managed-lazy-seq lazy-seq}])))
 
 #?(:cljd
    (do
@@ -38,9 +42,6 @@
      (defn iterate [& _args] (unsupported-runtime)))
    :default
    (do
-
-     (defmacro lazy-seq [& body]
-       `(lazyseq/lazy-seq* (fn [] ~@body)))
 
      (def ^:private none #?(:clj :clojure.core/none :cljs :cljs.core/none :cljd :cljd.core/none))
 
