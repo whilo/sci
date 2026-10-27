@@ -7,7 +7,7 @@
   [[:lazy-seq (map inc [1 2 3])]
    [:iterate (iterate inc 0)]
    [:cycle (cycle [1 2 3])]
-   [:iterator-seq #?(:clj (iterator-seq (.iterator ^java.lang.Iterable [1 2 3]))
+   [:iterator-seq #?(:clj (clojure.lang.IteratorSeq/create (.iterator ^java.lang.Iterable [1 2 3]))
                      :cljs (es6-iterator-seq (.values (js/Set. #js [1 2 3]))))]])
 
 (deftest native-caching-and-consuming-sequences-are-explicitly-affine
@@ -45,3 +45,18 @@
               (is (= [2 3] (sci/eval-string* child "(vec (map inc [1 2]))")))
               (finally (sci/retire! child))))
           (finally (sci/retire! ctx)))))))
+
+(deftest replace-does-not-capture-a-mutable-host-substitution-map
+  (let [ctx (sci/init {:runtime-mode :forkable})
+        substitutions #?(:clj (java.util.HashMap. {1 :one})
+                          :cljs (js/Map. #js [#js [1 "one"]]))]
+    (try
+      (sci/intern ctx 'user 'substitutions substitutions)
+      (doseq [form ["(replace substitutions)"
+                    "(replace substitutions (list 1 2))"
+                    "(replace substitutions [1 2])"]]
+        (testing form
+          (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
+                               #"explicit forkable adapter"
+                               (sci/eval-string* ctx form)))))
+      (finally (sci/retire! ctx)))))

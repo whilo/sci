@@ -501,9 +501,12 @@
        (take n (repeat x)))
 
      (defn replace
-       ([smap] (map #(if-let [entry (find smap %)] (val entry) %)))
+       ([smap]
+        (let [smap (lazyseq/checked-input smap)]
+          (map #(if-let [entry (find smap %)] (val entry) %))))
        ([smap coll]
-        (let [coll (lazyseq/checked-input coll)]
+        (let [smap (lazyseq/checked-input smap)
+              coll (lazyseq/checked-input coll)]
           (if (vector? coll)
        ;; The native vector path is entirely eager and returns a vector.
             (clojure.core/replace smap coll)
