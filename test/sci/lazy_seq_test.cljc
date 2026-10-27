@@ -495,3 +495,25 @@
                    (first xs)
                    (realized? xs)
                    @attempts]")))))
+
+(deftest lazy-sequence-equality-is-boolean-for-all-shapes
+  (doseq [mode [:standard :forkable]
+          [expression reference] [["(lazy-seq nil)" '()]
+                                  ["(lazy-seq (list 1 2))" '(1 2)]]]
+    (testing (str (name mode) " " expression)
+      (let [ctx (sci/init (if (= :forkable mode) {:runtime-mode :forkable} {}))
+            value (run ctx expression)
+            nonsequence #?(:clj (Object.) :cljs (js-obj) :cljd #{:not-a-sequence})]
+        (doseq [other ['() [] '(1) [1] '(1 2) [1 2]
+                       '(1 2 3) [1 2 3] '(1 3) [1 3]
+                       nil {} {:value 1} nonsequence]]
+          (let [expected (= reference other)]
+            (is (= expected (= value other))
+                "sequence equality returns the native boolean for this shape")
+            (is (= expected (= other value))
+                "reversing the arguments preserves equality")
+            #?(:clj
+               (do
+                 (is (= expected (.equals ^Object value other)))
+                 (when (some? other)
+                   (is (= expected (.equals ^Object other value))))))))))))
