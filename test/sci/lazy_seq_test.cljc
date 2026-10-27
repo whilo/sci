@@ -476,3 +476,22 @@
       (is (= :parent (sci/call-with-context unrelated public-function))
           "an unrelated active world cannot redirect a captured function")
       (is (= :parent (public-function))))))
+
+#?(:clj
+   (deftest standard-lazy-thunks-remain-retryable-after-an-exception
+     ;; This is an explicit native contract, rather than a managed/standard
+     ;; comparison: both paths could otherwise share the same broken retry.
+     (is (= [:failed false 1 :ok true 2]
+            (run (sci/init {})
+                 "(def attempts (atom 0))
+                  (def xs
+                    (lazy-seq
+                      (if (= 1 (swap! attempts inc))
+                        (throw (ex-info \"first realization fails\" {}))
+                        (list :ok))))
+                  [(try (first xs) (catch Exception _ :failed))
+                   (realized? xs)
+                   @attempts
+                   (first xs)
+                   (realized? xs)
+                   @attempts]")))))
