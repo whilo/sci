@@ -60,3 +60,24 @@
                                #"explicit forkable adapter"
                                (sci/eval-string* ctx form)))))
       (finally (sci/retire! ctx)))))
+
+(deftest foreign-sequence-error-data-does-not-realize-the-rejected-value
+  (let [calls (atom 0)
+        infinite-input (map (fn [x] (swap! calls inc) x) (range))
+        ctx (sci/init {:runtime-mode :forkable})]
+    (try
+      (sci/intern ctx 'user 'foreign infinite-input)
+      (let [failure (try
+                      (sci/fork ctx)
+                      nil
+                      (catch #?(:clj Exception :cljs js/Error) error error))
+            data (ex-data failure)]
+        (is (some? failure))
+        (is (= :lazy-seq (:resource-kind data)))
+        (is (not (contains? data :resource)))
+        (is (string? (:resource-type data)))
+        ;; Error reporting must terminate without even beginning this infinite
+        ;; stream, rather than retaining it as a printable exception payload.
+        (is (string? (pr-str data)))
+        (is (zero? @calls)))
+      (finally (sci/retire! ctx)))))
