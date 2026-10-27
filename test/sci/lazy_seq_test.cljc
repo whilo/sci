@@ -196,6 +196,43 @@
       (is (= 0 (run parent "@counter")))
       (is (= [:parent 1] (first (run parent "xs")))))))
 
+(deftest interpreted-functions-in-returned-sequences-keep-child-provenance
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (defn observe [] label)
+                 (def xs (lazy-seq (list observe observe observe)))
+                 (def nested-xs
+                   (lazy-seq (list {:function observe :nested [observe]})))
+                 (def chunked-xs (map (fn [_] observe) (vec (range 40))))
+                 (first xs)
+                 nil")
+    (let [child (sci/fork parent)
+          _ (run child "(def label :child)")
+          returned (run child "xs")
+          nested (run child "nested-xs")
+          chunked (run child "chunked-xs")]
+      (testing "first, next and rest project existing interpreted functions"
+        (is (= :child ((first returned))))
+        (is (= :child ((first (next returned)))))
+        (is (= :child ((first (rest returned))))))
+      (testing "projection descends through finite element maps and vectors"
+        (let [element (first nested)]
+          (is (= :child ((:function element))))
+          (is (= :child ((first (:nested element)))))))
+      (testing "metadata aliases retain the returning context and projection"
+        (let [alias (with-meta returned {:returning :child})]
+          (is (= {:returning :child} (meta alias)))
+          (is (= :child ((first alias))))))
+      (testing "chunk access projects functions as ordinary element access does"
+        (let [s (seq chunked)]
+          (is (chunked-seq? s))
+          (when (chunked-seq? s)
+            (let [chunk (chunk-first s)]
+              (is (= :child ((nth chunk 0))))
+              (is (= :child ((nth chunk (dec (count chunk))))))))))
+      (is (= :parent ((first (run parent "xs"))))
+          "projecting a child result must not replace the shared cached function"))))
+
 (deftest host-consumption-can-select-a-related-world-explicitly
   (let [parent (forkable)]
     (run parent "(def label :parent)
@@ -234,8 +271,8 @@
 #?(:cljd nil
    :clj
    (deftest foreign-host-lazy-sequences-remain-affine
-     (let [parent (sci/init {:runtime-mode :forkable
-                             :bindings {'foreign (map inc [1 2 3])}})]
+     (let [parent (sci/init {:runtime-mode :forkable})]
+       (sci/intern parent 'user 'foreign (map inc [1 2 3]))
        (try
          (sci/fork parent)
          (is false "a host lazy cache must not be silently shared")
@@ -297,3 +334,35 @@
            (finally
              (deliver release true)
              (future-cancel reader)))))))
+
+
+(deftest lazy-body-retains-its-implicit-zero-argument-recur-target
+  (let [code "(def calls (atom 0))
+              (def xs (lazy-seq
+                        (if (< (swap! calls inc) 3)
+                          (recur)
+                          (list @calls))))
+              [(first xs) @calls]"]
+    (is (= [3 3] (run (sci/init {}) code)))
+    (is (= (run (sci/init {}) code) (run (forkable) code)))))
+
+(deftest lazy-body-captures-lexical-bindings-before-a-fork
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (def xs (let [fixed :lexical n 7]
+                           (lazy-seq (list [fixed n label]))))
+                 nil")
+    (let [child (sci/fork parent)]
+      (is (= [:lexical 7 :child]
+             (run child "(def label :child) (first xs)")))
+      (is (= [:lexical 7 :parent] (run parent "(first xs)"))))))
+
+(deftest managed-lazy-helper-preserves-user-allowlists
+  (let [code "(lazy-seq (list :allowed))"
+        options {:allow '[lazy-seq list]}
+        standard (sci/init options)
+        managed (sci/init (assoc options :runtime-mode :forkable))]
+    (is (= '(:allowed) (run standard code)))
+    (is (= (run standard code) (run managed code)))
+    (let [child (sci/fork managed)]
+      (is (= '(:allowed) (run child code))))))
