@@ -17,7 +17,9 @@ that computation or make its external effects reversible.
    Explicit evaluation in a related context takes precedence; an unrelated
    context cannot retarget it.
 5. Thunk invocation failures remain retryable. Nested normalization failures
-   follow the respective JVM/JavaScript host behavior. Chunked producers keep
+   follow the respective JVM/JavaScript host behavior, including the newer
+   JVM pending marker that remains unset until normalization succeeds. A
+   small native behavior probe selects this contract. Chunked producers keep
    their host's chunk realization behavior; forcing one item can therefore
    evaluate a whole chunk.
 6. JVM realization in one world is serialized per sequence cache. Forking
@@ -28,6 +30,11 @@ These are value and isolation guarantees, not guarantees that a sequence
 completes, is deterministic, or has no effects. In particular, hashing an
 infinite sequence still does not terminate. The copier identifies handles by
 identity and never hashes their sequence contents as bookkeeping.
+
+Standard JVM lazy bodies also use reusable interpreter thunks. The host
+`lazy-seq` macro's `:once` closure optimization can clear captured interpreter
+machinery on a failed call; it must not prevent SCI's native lazy value from
+retrying its body on the next consumption.
 
 ## Representation and lifetime
 

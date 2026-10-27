@@ -120,7 +120,8 @@
                :resource-kind affine-kind
                ;; Error reporting must not realize a rejected lazy stream or
                ;; consume an iterator just to print its exception data.
-               :resource-type (str (type value))}))
+               :resource-type #?(:cljd "opaque-host-resource"
+                                  :default (str (type value)))}))
 
       #?(:clj (and (some? value) (.isArray ^Class (class value)))
          :cljs (array? value)
