@@ -39,9 +39,8 @@
    :default
    (do
 
-     #?(:clj
-        (defmacro lazy-seq [& body]
-          `(lazyseq/lazy-seq* (fn [] ~@body))))
+     (defmacro lazy-seq [& body]
+       `(lazyseq/lazy-seq* (fn [] ~@body)))
 
      (def ^:private none #?(:clj :clojure.core/none :cljs :cljs.core/none :cljd :cljd.core/none))
 
