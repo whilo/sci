@@ -202,3 +202,46 @@
       (is (false? (sci/eval-string* parent "(realized? retirement-cells)")))
       (is (= :parent-open (sci/eval-string* parent ":parent-open")))
       (finally (sci/retire! parent)))))
+
+
+(defn- project-and-retire-child!
+  [parent ^ReferenceQueue queue children worlds views functions]
+  (let [child (sci/fork parent)]
+    (swap! children conj (tracked-reference queue child))
+    (swap! worlds conj (tracked-reference queue (:sci.impl/world child)))
+    (try
+      (sci/eval-string* child "(def projection-label :child)")
+      (let [returned (sci/eval-string* child "projection-cells")
+            projected (first returned)]
+        (is (= :child (projected)))
+        (swap! views conj (tracked-reference queue returned))
+        (swap! functions conj (tracked-reference queue projected)))
+      (finally (sci/retire! child)))))
+
+(deftest parent-held-sequences-release-retired-child-function-projections
+  (let [queue (ReferenceQueue.)
+        children (atom [])
+        worlds (atom [])
+        views (atom [])
+        functions (atom [])
+        parent (sci/init {:runtime-mode :forkable})]
+    (try
+      (sci/eval-string*
+       parent
+       "(def projection-label :parent)
+        (defn projection-observe [] projection-label)
+        (def projection-cells (lazy-seq (list projection-observe)))
+        nil")
+      ;; Projected callbacks capture the child context. Keeping their raw
+      ;; source owner in the parent must not retain retired projection caches.
+      (dotimes [_ 12]
+        (project-and-retire-child! parent queue children worlds views functions))
+      (is (= 12 (count @functions)))
+      (is (collect-unreachable! queue (into [] cat [@children @worlds @views @functions]))
+          (str "retirement must release context-bound projection cycles: "
+               {:contexts (reachable-count @children)
+                :worlds (reachable-count @worlds)
+                :views (reachable-count @views)
+                :functions (reachable-count @functions)}))
+      (is (= :parent ((first (sci/eval-string* parent "projection-cells")))))
+      (finally (sci/retire! parent)))))

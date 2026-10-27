@@ -254,7 +254,8 @@
         (let [chunk (chunk-first s)]
           (is (identical? head (nth chunk 0)))
           (is (identical? head (nth (chunk-first (seq value)) 0)))
-          (is (= (vec chunk) (subvec snapshot 0 (count chunk)))))))))
+          (is (= (mapv #(nth chunk %) (range (count chunk)))
+                 (subvec snapshot 0 (count chunk)))))))))
 
 (deftest projected-function-elements-obey-collection-laws
   (let [parent (forkable)]
@@ -419,3 +420,27 @@
     (is (= (run standard code) (run managed code)))
     (let [child (sci/fork managed)]
       (is (= '(:allowed) (run child code))))))
+
+
+(deftest projected-tails-retained-before-a-fork-resolve-in-the-child
+  (doseq [tail-kind [:next :rest :chunk-next]]
+    (testing (name tail-kind)
+      (let [parent (forkable)]
+        (run parent "(def label :parent)
+                     (defn observe [] label)
+                     (def xs (map (fn [_] observe) (vec (range 40))))
+                     nil")
+        (let [returned (run parent "xs")
+              tail (case tail-kind
+                     :next (next returned)
+                     :rest (rest returned)
+                     :chunk-next (chunk-next (seq returned)))]
+          ;; Materialize the parent projection before cloning its cache. A
+          ;; child must not inherit a function already bound to the parent.
+          (is (= :parent ((first tail))))
+          (sci/intern parent 'user 'retained-tail tail)
+          (let [child (sci/fork parent)]
+            (run child "(def label :child)")
+            (is (= :child ((first (run child "retained-tail")))))
+            (is (= :child (sci/call-with-context child #((first tail))))))
+          (is (= :parent ((first tail)))))))))
