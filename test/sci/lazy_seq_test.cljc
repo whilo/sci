@@ -444,3 +444,35 @@
             (is (= :child ((first (run child "retained-tail")))))
             (is (= :child (sci/call-with-context child #((first tail))))))
           (is (= :parent ((first tail)))))))))
+
+(deftest projected-public-sequences-do-not-pin-nested-lazy-bodies-to-the-parent
+  (let [parent (forkable)]
+    (run parent "(def label :parent)
+                 (defn observe [] label)
+                 (def xs (lazy-seq (list observe)))
+                 nil")
+    (let [public (run parent "xs")]
+      (sci/intern parent 'user 'public-xs public)
+      ;; Returning a public projection through another lazy body must normalize
+      ;; to raw values, even after the parent has materialized its projection.
+      (run parent "(def ys (lazy-seq public-xs)) (first ys) nil")
+      (is (= :parent (run parent "((first ys))")))
+      (let [child (sci/fork parent)]
+        (run child "(def label :child)")
+        (is (= :child (run child "((first ys))")))
+        (is (= :parent (run parent "((first ys))")))))))
+
+(deftest returned-functions-prefer-related-active-worlds
+  (let [parent (forkable)]
+    (run parent "(def label :parent) (defn observe [] label) nil")
+    (let [public-function (run parent "observe")
+          child (sci/fork parent)
+          unrelated (forkable)]
+      (run child "(def label :child)")
+      (run unrelated "(def label :unrelated)")
+      (sci/intern child 'user 'external public-function)
+      (is (= :child (run child "(external)")))
+      (is (= :child (sci/call-with-context child public-function)))
+      (is (= :parent (sci/call-with-context unrelated public-function))
+          "an unrelated active world cannot redirect a captured function")
+      (is (= :parent (public-function))))))
