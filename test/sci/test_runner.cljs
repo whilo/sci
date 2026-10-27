@@ -12,6 +12,11 @@
    [sci.impl.binding-array-refactor-test]
    [sci.interop-test]
    [sci.io-test]
+   [sci.interrupt-managed-test]
+   [sci.lazy-seq-test]
+   [sci.lazy-producers-test]
+   [sci.lazy-foreign-input-test]
+   [sci.world-retirement-test]
    [sci.js-test]
    [sci.multimethods-test]
    [sci.namespaces-test]
@@ -54,6 +59,11 @@
    'sci.hierarchies-test
    'sci.interop-test
    'sci.io-test
+   'sci.interrupt-managed-test
+   'sci.lazy-seq-test
+   'sci.lazy-producers-test
+   'sci.lazy-foreign-input-test
+   'sci.world-retirement-test
    'sci.js-test
    'sci.multimethods-test
    'sci.namespaces-test

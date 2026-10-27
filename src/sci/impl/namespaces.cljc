@@ -41,6 +41,8 @@
    ;; no hierarchies on cljd, like the host
    #?@(:cljd [] :default [[sci.impl.hierarchies :as hierarchies]])
    [sci.impl.io :as io]
+   [sci.impl.lazy-seq :as lazyseq]
+   [sci.impl.lazy-producers :as lazy-producers]
    [sci.impl.load :as load :refer [load-string load-reader]]
    [sci.impl.macroexpand :as mexpand]
    [sci.impl.macros :as macros]
@@ -1360,6 +1362,9 @@
     ;;(println exp)
     exp))
 
+(defn forkable-lazy-seq* [_ _ & body]
+  (list 'clojure.core/-lazy-seq* (list* 'fn* [] body)))
+
 (defn lazy-seq*
   [_ _ & body]
   #?(:cljd `(clojure.core/-lazy-seq* (fn [] ~@body))
@@ -2213,7 +2218,12 @@
 
  (def forkable-core-overrides
    (merge
-    {'deref (copy-var core-protocols/forkable-deref* clojure-core-ns
+    (into {} (map (fn [[sym f]] [sym (copy-var f clojure-core-ns
+                                              {:name sym :copy-meta-from (symbol "clojure.core" (str sym))})]))
+          lazy-producers/producer-functions)
+    {'lazy-seq (macrofy 'lazy-seq forkable-lazy-seq*)
+     '-lazy-seq* (new-var '-lazy-seq* lazyseq/lazy-seq* clojure-core-ns)
+     'deref (copy-var core-protocols/forkable-deref* clojure-core-ns
                       {:name 'deref})
      'apply (copy-var core-protocols/forkable-apply clojure-core-ns
                       {:name 'apply})
